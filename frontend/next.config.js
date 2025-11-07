@@ -1,4 +1,5 @@
 /** @type {import('next').NextConfig} */
+const path = require('path')
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
@@ -11,9 +12,14 @@ const nextConfig = {
       fs: false,
     };
     
-    // Note: We're using patch-package to fix three.js and three-globe
-    // The patches add the missing exports directly to node_modules
-    // No webpack aliases needed - let Next.js use the patched files
+    // Ensure all imports resolve to the same three instance to avoid
+    // multiple-three warnings and prototype mismatches when using
+    // globe.gl / three-globe alongside three.
+    config.resolve = config.resolve || {}
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      three: path.resolve('./node_modules/three'),
+    }
     
     // Handle .mjs files properly
     config.module = {

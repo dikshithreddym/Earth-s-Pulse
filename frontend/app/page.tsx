@@ -17,7 +17,7 @@ export default function Home() {
   // Fetch moods from backend
   const fetchMoods = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/moods?limit=200`)
+      const response = await fetch(`${API_BASE_URL}/api/moods?limit=100`)
       if (response.ok) {
         const data = await response.json()
         setMoods(data)
@@ -43,10 +43,50 @@ export default function Home() {
     }
   }
 
-  // Initial fetch
+  // Refresh moods from social media APIs
+  const refreshMoods = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/moods/refresh`, {
+        method: 'POST'
+      })
+      if (response.ok) {
+        const data = await response.json()
+        console.log('✅ Data refreshed:', data.count, 'points')
+        // After refresh, fetch the updated data
+        await fetchMoods()
+        return true
+      }
+    } catch (error) {
+      console.error('Error refreshing moods:', error)
+    }
+    return false
+  }
+
+  // Initial fetch - refresh data first if no data exists, then fetch
   useEffect(() => {
-    fetchMoods()
-    fetchSummary()
+    const initializeData = async () => {
+      setLoading(true)
+      // First check if we have data
+      const response = await fetch(`${API_BASE_URL}/api/moods?limit=1`)
+      let hasData = false
+      if (response.ok) {
+        const data = await response.json()
+        hasData = data && data.length > 0
+      }
+      
+      // If no data, refresh from APIs
+      if (!hasData) {
+        await refreshMoods()
+      } else {
+        // If data exists, just fetch it
+        await fetchMoods()
+      }
+      
+      // Fetch summary
+      await fetchSummary()
+      setLoading(false)
+    }
+    initializeData()
   }, [])
 
   // Auto-refresh every 30 seconds
@@ -120,18 +160,47 @@ export default function Home() {
         {/* Header Overlay - Responsive */}
         <div className="absolute top-4 left-4 right-4 lg:top-6 lg:left-6 lg:right-auto z-10">
           <div className="bg-gray-900/80 backdrop-blur-xl rounded-xl lg:rounded-2xl px-4 py-3 lg:px-6 lg:py-4 border border-gray-700/50 shadow-2xl max-w-full">
-            <div className="flex items-center gap-2 lg:gap-3 mb-1">
-              <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-lg lg:rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg flex-shrink-0">
-                <span className="text-xl lg:text-2xl">🌍</span>
+            <div className="flex items-center justify-between gap-2 lg:gap-3 mb-1">
+              <div className="flex items-center gap-2 lg:gap-3 flex-1 min-w-0">
+                <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-lg lg:rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg flex-shrink-0">
+                  <span className="text-xl lg:text-2xl">🌍</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent truncate">
+                    Earth's Pulse
+                  </h1>
+                  <p className="text-xs lg:text-sm text-gray-400 mt-0.5 truncate">
+                    Real-Time Emotional Map of the Planet
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0 flex-1">
-                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent truncate">
-                  Earth's Pulse
-                </h1>
-                <p className="text-xs lg:text-sm text-gray-400 mt-0.5 truncate">
-                  Real-Time Emotional Map of the Planet
-                </p>
-              </div>
+              {/* Refresh Button */}
+              <button
+                onClick={async () => {
+                  setLoading(true)
+                  await refreshMoods()
+                  await fetchSummary()
+                  setLoading(false)
+                }}
+                className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3 py-1.5 lg:px-4 lg:py-2 rounded-lg text-xs lg:text-sm font-medium transition-colors flex items-center gap-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Refresh data from Reddit/Twitter"
+                disabled={loading}
+              >
+                <svg 
+                  className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} 
+                  fill="none" 
+                  stroke="currentColor" 
+                  viewBox="0 0 24 24"
+                >
+                  <path 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    strokeWidth={2} 
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" 
+                  />
+                </svg>
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
             </div>
           </div>
         </div>

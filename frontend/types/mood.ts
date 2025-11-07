@@ -6,5 +6,6 @@ export interface MoodPoint {
   source: string
   text?: string
   timestamp?: string | Date
+  city_name?: string
 }
 
