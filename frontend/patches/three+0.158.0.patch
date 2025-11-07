@@ -1,0 +1,59 @@
+diff --git a/node_modules/three/tsl.js b/node_modules/three/tsl.js
+new file mode 100644
+index 0000000..604e879
+--- /dev/null
++++ b/node_modules/three/tsl.js
+@@ -0,0 +1,42 @@
++// Stub for three/tsl - not available in three.js 0.158.0
++// Export all functions that three-globe might use
++// When imported as namespace (import * as tsl), all exports are available on the namespace
++
++// Create the namespace object with all required functions
++const tslNamespace = {
++  Fn: () => {},
++  If: () => {},
++  uniform: () => {},
++  storage: () => {},
++  float: () => {},
++  instanceIndex: () => {},
++  Loop: () => {},
++  sqrt: Math.sqrt,
++  sin: Math.sin,
++  cos: Math.cos,
++  asin: Math.asin,
++  exp: Math.exp,
++  negate: (x) => -x
++};
++
++// Export as named exports (for direct imports)
++export const Fn = tslNamespace.Fn;
++export const If = tslNamespace.If;
++export const uniform = tslNamespace.uniform;
++export const storage = tslNamespace.storage;
++export const float = tslNamespace.float;
++export const instanceIndex = tslNamespace.instanceIndex;
++export const Loop = tslNamespace.Loop;
++export const sqrt = tslNamespace.sqrt;
++export const sin = tslNamespace.sin;
++export const cos = tslNamespace.cos;
++export const asin = tslNamespace.asin;
++export const exp = tslNamespace.exp;
++export const negate = tslNamespace.negate;
++
++// Export as default (for default imports)
++export default tslNamespace;
++
++// Note: When using 'import * as tsl', all named exports become properties of tsl
++// So tsl.sqrt, tsl.cos, etc. will work automatically
++
+diff --git a/node_modules/three/webgpu.js b/node_modules/three/webgpu.js
+new file mode 100644
+index 0000000..688471c
+--- /dev/null
++++ b/node_modules/three/webgpu.js
+@@ -0,0 +1,5 @@
++// Stub for three/webgpu - not available in three.js 0.158.0
++export const StorageInstancedBufferAttribute = null;
++export const WebGPURenderer = null;
++export default {};
++

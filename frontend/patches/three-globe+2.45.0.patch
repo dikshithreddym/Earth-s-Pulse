@@ -1,0 +1,18 @@
+diff --git a/node_modules/three-globe/dist/three-globe.mjs b/node_modules/three-globe/dist/three-globe.mjs
+index cec908a..c3b0eb0 100644
+--- a/node_modules/three-globe/dist/three-globe.mjs
++++ b/node_modules/three-globe/dist/three-globe.mjs
+@@ -16,8 +16,11 @@ import indexBy from 'index-array-by';
+ import { latLngToCell, cellToLatLng, cellToBoundary, polygonToCells } from 'h3-js';
+ import { interpolateTurbo } from 'd3-scale-chromatic';
+ import { sum, max } from 'd3-array';
+-import { StorageInstancedBufferAttribute, WebGPURenderer } from 'three/webgpu';
+-import * as tsl from 'three/tsl';
++// Patched: Replaced problematic imports with safe alternatives
++// These don't exist in three.js 0.158.0, so we provide null/empty implementations
++const StorageInstancedBufferAttribute = null;
++const WebGPURenderer = null;
++const tsl = {};
+ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';

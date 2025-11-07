@@ -1,0 +1,35 @@
+# FastAPI and server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Database
+motor==3.3.2
+pymongo==4.6.0
+
+# Social Media APIs
+praw==7.7.1
+tweepy==4.14.0
+
+# NLP and Sentiment Analysis
+transformers==4.35.2
+torch==2.1.1
+sentencepiece==0.1.99
+protobuf==4.25.1
+
+# Text Processing
+spacy==3.7.2
+nltk==3.8.1
+
+# HTTP Client
+httpx==0.25.2
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Data validation
+pydantic==2.5.0
+
+# Async utilities
+aiofiles==23.2.1
+
