@@ -17,6 +17,7 @@ from services.social_fetcher import SocialMediaFetcher
 from services.database import DatabaseService
 from services.summary_generator import SummaryGenerator
 from models.mood import MoodPoint
+from collections import deque
 
 # Load environment variables
 load_dotenv()
@@ -47,12 +48,63 @@ summary_generator = SummaryGenerator()
 async def startup_event():
     """Initialize services on startup"""
     await db_service.connect()
+    # Create a queue for streaming posts and start background consumers/producers
+    app.state.post_queue = asyncio.Queue()
+    # Keep a small history of raw posts for debugging
+    app.state.recent_raw_posts = deque(maxlen=200)
+
+    # Start streaming threads that push raw posts into the queue
+    try:
+        social_fetcher.start_streams(app.state.post_queue, loop=asyncio.get_event_loop())
+    except Exception as e:
+        print(f"⚠️ Could not start streams: {e}")
+
+    # consumer task: analyze and insert into DB
+    async def _consume_queue(q: asyncio.Queue):
+        print("🔁 Starting post consumer task")
+        while True:
+            post = await q.get()
+            try:
+                # keep a recent raw copy for debug endpoint
+                try:
+                    app.state.recent_raw_posts.append(post)
+                except Exception:
+                    pass
+                # Analyze sentiment (synchronous analyze)
+                sentiment_result = sentiment_analyzer.analyze(post.get("text", ""))
+
+                mood_point = MoodPoint(
+                    lat=post.get("lat") if post.get("lat") is not None else 0.0,
+                    lng=post.get("lng") if post.get("lng") is not None else 0.0,
+                    label=sentiment_result.get("label", "neutral"),
+                    score=sentiment_result.get("score", 0.0),
+                    source=post.get("source", "unknown"),
+                    text=post.get("text", "")[:200],
+                    timestamp=post.get("timestamp") or datetime.utcnow()
+                )
+
+                # Insert to DB
+                await db_service.insert_moods([mood_point])
+            except Exception as e:
+                print(f"Error consuming post: {e}")
+            finally:
+                q.task_done()
+
+    app.state.consumer_task = asyncio.create_task(_consume_queue(app.state.post_queue))
     print("✅ Backend services initialized")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
+    # Cancel consumer task if running
+    try:
+        if getattr(app.state, 'consumer_task', None):
+            app.state.consumer_task.cancel()
+            await app.state.consumer_task
+    except Exception:
+        pass
+
     await db_service.disconnect()
     print("✅ Backend services shut down")
 
@@ -199,6 +251,16 @@ async def get_stats():
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching stats: {str(e)}")
+
+
+@app.get("/api/debug/raw_posts")
+async def debug_raw_posts(limit: Optional[int] = 20):
+    """Return the most recent raw posts captured by the streaming producers (pre-analysis)."""
+    try:
+        recent = list(getattr(app.state, 'recent_raw_posts', []))
+        return recent[-limit:]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error returning debug posts: {e}")
 
 
 if __name__ == "__main__":

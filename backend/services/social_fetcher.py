@@ -5,12 +5,15 @@ Fetches posts from Reddit and Twitter with location data
 
 import os
 import praw
-import tweepy
-from typing import List, Dict, Optional
-from dotenv import load_dotenv
 import random
 import asyncio
+import threading
+import time
+import requests
+from collections import deque
 from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -20,6 +23,12 @@ class SocialMediaFetcher:
     def __init__(self):
         self.reddit_client = None
         self.twitter_client = None
+        # Recent IDs for deduplication (in-memory)
+        self._recent_ids = set()
+        self._recent_ids_queue = deque(maxlen=5000)
+        # Optional geocoder config
+        self.geocoder_enabled = os.getenv("ENABLE_GEOCODER", "false").lower() in ("1", "true", "yes")
+        self.geocoder_url = os.getenv("GEOCODER_URL", "https://nominatim.openstreetmap.org/search")
         self._initialize_clients()
     
     def _initialize_clients(self):
@@ -52,6 +61,116 @@ class SocialMediaFetcher:
     def is_ready(self) -> bool:
         """Check if at least one social media client is ready"""
         return self.reddit_client is not None or self.twitter_client is not None
+
+    # --- Streaming / polling helpers -------------------------------------------------
+    def start_streams(self, queue: asyncio.Queue, loop: Optional[asyncio.AbstractEventLoop] = None,
+                      subreddits: Optional[list] = None, twitter_rules: Optional[list] = None):
+        """
+        Start background threads to stream Reddit comments and Twitter tweets.
+
+        - queue: asyncio.Queue used to push raw post dicts into the async consumer
+        - loop: event loop used to schedule queue.put_nowait from threads; defaults to asyncio.get_event_loop()
+        - subreddits: list of subreddit names to stream (default: ['news','worldnews'])
+        - twitter_rules: list of streaming rules for Twitter (strings)
+        """
+        loop = loop or asyncio.get_event_loop()
+
+        # Start Reddit stream thread
+        if self.reddit_client:
+            subs = subreddits or ["news", "worldnews"]
+            t = threading.Thread(target=self._reddit_stream_thread, args=(subs, queue, loop), daemon=True)
+            t.start()
+            print(f"✅ Started Reddit stream thread for: {subs}")
+
+        # Start Twitter stream thread
+        if self.twitter_client:
+            rules = twitter_rules or ["lang:en -is:retweet"]
+            t2 = threading.Thread(target=self._twitter_stream_thread, args=(rules, queue, loop), daemon=True)
+            t2.start()
+            print(f"✅ Started Twitter stream thread with rules: {rules}")
+
+    def _reddit_stream_thread(self, subreddits: list, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        """Background thread: stream new Reddit comments and push to asyncio queue."""
+        try:
+            # Combine subreddits
+            sub_names = "+".join(subreddits)
+            subreddit = self.reddit_client.subreddit(sub_names)
+            for comment in subreddit.stream.comments(skip_existing=True):
+                try:
+                    post = {
+                        "id": getattr(comment, 'id', None),
+                        "text": getattr(comment, 'body', '')[:1000],
+                        "lat": None,
+                        "lng": None,
+                        "source": "reddit",
+                        "timestamp": datetime.utcfromtimestamp(getattr(comment, 'created_utc', time.time()))
+                    }
+                    # push into asyncio queue from thread
+                    loop.call_soon_threadsafe(queue.put_nowait, post)
+                except Exception as e:
+                    print(f"Error processing reddit comment in stream: {e}")
+        except Exception as e:
+            print(f"Reddit stream thread crashed: {e}")
+
+    def _twitter_stream_thread(self, rules: list, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        """Background thread: start Tweepy StreamingClient and push matched tweets to the queue."""
+        try:
+            # Create a local StreamingClient subclass to handle tweets
+            bearer = os.getenv("TWITTER_BEARER_TOKEN")
+            if not bearer:
+                print("⚠️ No TWITTER_BEARER_TOKEN found, skipping twitter stream")
+                return
+
+            # Import inside thread to avoid issues if tweepy isn't available at module import
+            import tweepy as _tweepy
+
+            class _LocalStream(_tweepy.StreamingClient):
+                def __init__(self, bearer_token, q, loop):
+                    super().__init__(bearer_token)
+                    self._q = q
+                    self._loop = loop
+
+                def on_connect(self):
+                    print("✅ Connected to Twitter stream")
+
+                def on_tweet(self, tweet):
+                    try:
+                        post = {
+                            "id": getattr(tweet, 'id', None),
+                            "text": getattr(tweet, 'text', '')[:1000],
+                            "lat": None,
+                            "lng": None,
+                            "source": "twitter",
+                            "timestamp": getattr(tweet, 'created_at', datetime.utcnow())
+                        }
+                        self._loop.call_soon_threadsafe(self._q.put_nowait, post)
+                    except Exception as e:
+                        print(f"Error in twitter on_tweet: {e}")
+
+                def on_errors(self, errors):
+                    print("Twitter stream error:", errors)
+
+            stream = _LocalStream(bearer, queue, loop)
+
+            # Delete old rules and set new ones
+            try:
+                existing = stream.get_rules()
+                if existing and getattr(existing, 'data', None):
+                    ids = [r.id for r in existing.data]
+                    stream.delete_rules(ids)
+            except Exception:
+                pass
+
+            for r in rules:
+                try:
+                    stream.add_rules(_tweepy.StreamRule(r))
+                except Exception as e:
+                    print(f"Could not add twitter rule {r}: {e}")
+
+            # Start the stream (blocks inside thread)
+            stream.filter(tweet_fields=["created_at", "geo", "text"], expansions=["geo.place_id"])
+        except Exception as e:
+            print(f"Twitter stream thread crashed: {e}")
     
     async def fetch_recent_posts(self, limit: int = 50) -> List[Dict]:
         """
@@ -190,6 +309,46 @@ class SocialMediaFetcher:
                 random.uniform(-90, 90),
                 random.uniform(-180, 180)
             )
+
+    # --- Deduplication helpers ------------------------------------------------------
+    def _is_duplicate(self, _id: Optional[str]) -> bool:
+        """Return True if id seen recently; track id otherwise."""
+        if not _id:
+            return False
+        if _id in self._recent_ids:
+            return True
+        # record id
+        self._recent_ids.add(_id)
+        self._recent_ids_queue.append(_id)
+        # keep set in sync with queue size
+        if len(self._recent_ids_queue) > self._recent_ids_queue.maxlen:
+            old = self._recent_ids_queue.popleft()
+            self._recent_ids.discard(old)
+        return False
+
+    # --- Geocoding helper (simple, optional) ---------------------------------------
+    def _geocode_text(self, text: str) -> Optional[tuple]:
+        """Try to geocode a location string found in text using Nominatim.
+
+        Returns (lat, lng) or None.
+        """
+        if not self.geocoder_enabled or not text or len(text) < 3:
+            return None
+        try:
+            params = {"q": text, "format": "json", "limit": 1}
+            headers = {"User-Agent": "EarthPulse/1.0 (email@example.com)"}
+            resp = requests.get(self.geocoder_url, params=params, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data:
+                    lat = float(data[0]["lat"])
+                    lon = float(data[0]["lon"])
+                    # Respect Nominatim usage policy: sleep briefly
+                    time.sleep(1)
+                    return (lat, lon)
+        except Exception as e:
+            print(f"Geocode error: {e}")
+        return None
     
     def _generate_mock_posts(self, limit: int) -> List[Dict]:
         """Generate mock posts for demo/testing when APIs are not available"""
