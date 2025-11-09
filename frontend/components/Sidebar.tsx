@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import TrendChart from './TrendChart'
 import { MoodPoint } from '@/types/mood'
 import CityPostsModal from './CityPostsModal'
 
@@ -97,6 +96,7 @@ export default function Sidebar(props: SidebarProps) {
   const [postsOpen, setPostsOpen] = useState(false);
   const [postsCity, setPostsCity] = useState<string | undefined>(undefined);
   const [posts, setPosts] = useState<any[]>([]);
+  const [showScoreInfo, setShowScoreInfo] = useState(false);
 
   const generateAudio = async () => {
     setAudioLoading(true);
@@ -239,7 +239,14 @@ export default function Sidebar(props: SidebarProps) {
                 <div className="w-7 h-7 lg:w-8 lg:h-8 rounded-lg bg-purple-500/20 flex items-center justify-center flex-shrink-0">
                   <span className="text-base lg:text-lg">📊</span>
                 </div>
-                <p className="text-xs text-gray-400 uppercase tracking-wide truncate">Avg Score</p>
+                <p className="text-xs text-gray-400 uppercase tracking-wide truncate flex-1">Avg Score</p>
+                <button
+                  onClick={() => setShowScoreInfo(true)}
+                  className="w-5 h-5 rounded-full bg-purple-500/30 hover:bg-purple-500/50 flex items-center justify-center transition-all duration-200 flex-shrink-0"
+                  aria-label="Learn about Average Score"
+                >
+                  <span className="text-xs text-purple-200">ℹ️</span>
+                </button>
               </div>
               <p className="text-2xl lg:text-3xl font-bold text-white">
                 {avgScore >= 0 ? '+' : ''}{avgScore.toFixed(2)}
@@ -300,15 +307,6 @@ export default function Sidebar(props: SidebarProps) {
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* Trend Chart */}
-          <div className="bg-gray-800/50 rounded-lg lg:rounded-xl p-3 lg:p-4 border border-gray-700/50">
-            <h3 className="text-base lg:text-lg font-semibold mb-2 lg:mb-3 flex items-center gap-2">
-              <span className="text-lg lg:text-xl">📉</span>
-              <span className="truncate">Trend Analysis</span>
-            </h3>
-            <TrendChart moods={moods} />
           </div>
 
           {/* AI Summary */}
@@ -400,6 +398,79 @@ export default function Sidebar(props: SidebarProps) {
         </div>
       </div>
       <CityPostsModal open={postsOpen} city={postsCity} posts={posts} onClose={() => setPostsOpen(false)} />
+      
+      {/* Average Score Info Modal */}
+      {showScoreInfo && (
+        <div 
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setShowScoreInfo(false)}
+        >
+          <div 
+            className="bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-900 rounded-2xl p-6 max-w-md w-full border border-indigo-500/30 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-12 h-12 rounded-xl bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
+                <span className="text-2xl">💯</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-xl font-bold text-white mb-1">
+                  Understanding Average Score
+                </h3>
+                <p className="text-sm text-indigo-300">
+                  How we measure global sentiment
+                </p>
+              </div>
+              <button
+                onClick={() => setShowScoreInfo(false)}
+                className="text-gray-400 hover:text-white transition-colors flex-shrink-0"
+                aria-label="Close"
+              >
+                <svg className="w-6 h-6" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" stroke="currentColor">
+                  <path d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <p className="text-sm text-gray-200 leading-relaxed">
+                The <span className="font-semibold text-white">Average Score</span> represents the global mood based on sentiment analysis of social media posts from cities worldwide.
+              </p>
+              
+              <div className="bg-black/30 rounded-lg p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-indigo-300 mb-2">Score Range</h4>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="text-green-400 font-bold text-lg w-12">+1.0</span>
+                    <span className="text-sm text-gray-300">Most positive sentiment</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-yellow-400 font-bold text-lg w-12">0.0</span>
+                    <span className="text-sm text-gray-300">Neutral sentiment</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-red-400 font-bold text-lg w-12">-1.0</span>
+                    <span className="text-sm text-gray-300">Most negative sentiment</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-purple-500/10 rounded-lg p-3 border border-purple-500/20">
+                <p className="text-xs text-gray-300 italic">
+                  💡 <span className="font-semibold">How it's calculated:</span> We average the sentiment scores from all active data points currently displayed on the map.
+                </p>
+              </div>
+              
+              <button
+                onClick={() => setShowScoreInfo(false)}
+                className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-3 rounded-lg transition-all duration-200 shadow-lg"
+              >
+                Got it!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
