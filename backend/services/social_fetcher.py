@@ -6,7 +6,7 @@ Fetches posts from Reddit and Twitter with location data
 import os
 import praw
 import tweepy
-from typing import List, Dict, Optional
+from typing import List, Dict
 from dotenv import load_dotenv
 import random
 import asyncio
@@ -160,6 +160,7 @@ class SocialMediaFetcher:
                         "source": "reddit",
                         "timestamp": datetime.utcnow(),
                         "city_name": city_name,
+                        "is_fallback": True,
                     })
 
         except Exception as e:
@@ -286,7 +287,8 @@ class SocialMediaFetcher:
                 "lat": lat,
                 "lng": lng,
                 "source": source,
-                "timestamp": datetime.utcnow() - timedelta(minutes=random.randint(0, 60))
+                "timestamp": datetime.utcnow() - timedelta(minutes=random.randint(0, 60)),
+                "is_fallback": True,
             })
         
         return posts
@@ -309,4 +311,46 @@ class SocialMediaFetcher:
             "Concerned about the future. Hoping for the best.",
             "Thrilled about the concert next week! Can't wait!",
         ]
+
+    async def fetch_city_posts(self, city: str, limit: int = 50) -> List[Dict]:
+        """
+        Fetch recent posts mentioning the city. Returns list of dicts:
+        { platform, text, url, author }
+        """
+        results: List[Dict] = []
+        try:
+            # If you already have per-platform methods, call them here with city as query.
+            # Example (pseudo):
+            # results += await self.fetch_reddit(query=city, limit=limit//2)
+            # results += await self.fetch_twitter(query=city, limit=limit//2)
+            pass
+        except Exception:
+            pass
+
+        if results:
+            return results[:limit]
+
+        # Fallback mock if APIs are not configured; remove if you strictly want only real posts.
+        return [
+            {"platform": "mock", "text": f"Sample discussion around {city} — local events and sentiment.", "url": None, "author": "demo"},
+            {"platform": "mock", "text": f"Residents in {city} share mixed feelings today.", "url": None, "author": "demo"},
+        ]
+    
+    def _to_mood_point(self, post, city_meta, sentiment_result):
+        # post: dict with keys text,url,author,id,platform
+        score, label = sentiment_result
+        return MoodPoint(
+            lat=city_meta["lat"],
+            lng=city_meta["lng"],
+            city_name=city_meta["name"],
+            country=city_meta.get("country"),
+            score=score,
+            label=label,
+            timestamp=datetime.utcnow(),
+            platform=post.get("platform"),
+            post_text=post.get("text"),
+            post_url=post.get("url"),
+            post_author=post.get("author"),
+            post_id=post.get("id"),
+        )
 

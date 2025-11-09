@@ -3,9 +3,21 @@
 import { useEffect, useState } from 'react'
 import GlobeComponent from '@/components/Globe'
 import Sidebar from '@/components/Sidebar'
+import CityPostsModal from '@/components/CityPostsModal'
 import { MoodPoint } from '@/types/mood'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+
+async function safeFetch(url: string, opts?: RequestInit) {
+  try {
+    const r = await fetch(url, { ...opts })
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    return await r.json()
+  } catch (e) {
+    console.error('Fetch failed', url, e)
+    return null
+  }
+}
 
 export default function Home() {
   const [moods, setMoods] = useState<MoodPoint[]>([])
@@ -13,12 +25,15 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [postsOpen, setPostsOpen] = useState(false)
+  const [postsCity, setPostsCity] = useState<string | undefined>()
+  const [posts, setPosts] = useState<any[]>([])
 
   // Fetch moods from backend
   const fetchMoods = async () => {
     try {
-  // Request a larger window and let the backend return only city-named, unique-per-city points
-  const response = await fetch(`${API_BASE_URL}/api/moods?limit=1000&only_city=true&unique_per_city=true`)
+      // Request a larger window and let the backend return only city-named, unique-per-city points
+      const response = await fetch(`${API_BASE_URL}/api/moods?limit=1000&only_city=true&unique_per_city=true`)
       if (response.ok) {
         const data = await response.json()
         setMoods(data)
@@ -100,8 +115,32 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [])
 
+  const fetchCityPosts = async (city: string) => {
+    const r = await fetch(`${API_BASE_URL}/api/city/posts?city=${encodeURIComponent(city)}&limit=40&live=true`, { cache: 'no-store' })
+    const j = await r.json()
+    setPosts(j.posts || [])
+    setPostsCity(city)
+    setPostsOpen(true)
+  }
+
+  const fetchNearPosts = async (lat: number, lng: number) => {
+    const r = await fetch(`${API_BASE_URL}/api/posts/near?lat=${lat}&lng=${lng}&limit=40`, { cache: 'no-store' })
+    const j = await r.json()
+    setPosts(j.posts || [])
+    setPostsCity(j.city || j?.resolved_city?.name)
+    setPostsOpen(true)
+  }
+
+  const handlePointClick = (m: MoodPoint) => {
+    if (m?.city_name) fetchCityPosts(m.city_name)
+    else if (m?.lat && m?.lng) fetchNearPosts(m.lat, m.lng)
+  }
+
+  // Hook into your globe/pin click handler:
+  // globe.onPointClick((p) => openPinPosts(p.lat, p.lng));
+
   return (
-    <main className="flex flex-col lg:flex-row h-screen w-screen overflow-hidden relative">
+    <main className="flex flex-col lg:flex-row h-screen">
       {/* Mobile Menu Toggle Button */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -153,13 +192,13 @@ export default function Home() {
       )}
 
       {/* Globe Container */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden min-w-0 w-full">
-        <div className="absolute inset-0 flex items-center justify-center">
-          <GlobeComponent moods={moods} loading={loading} />
-        </div>
-        
-        {/* Header Overlay - Responsive */}
-        <div className="absolute top-4 left-4 right-4 lg:top-6 lg:left-6 lg:right-auto z-10">
+      <div className="flex-1 relative min-w-0 w-full">
+        <GlobeComponent
+          moods={moods}
+          loading={loading}
+          onPointClick={handlePointClick}
+        />
+        <div className="absolute top-4 left-4 right-4 lg:top-6 lg:left-6 lg:right-auto z-10 pointer-events-auto">
           <div className="bg-gray-900/80 backdrop-blur-xl rounded-xl lg:rounded-2xl px-4 py-3 lg:px-6 lg:py-4 border border-gray-700/50 shadow-2xl max-w-full">
             <div className="flex items-center justify-between gap-2 lg:gap-3 mb-1">
               <div className="flex items-center gap-2 lg:gap-3 flex-1 min-w-0">
@@ -222,6 +261,12 @@ export default function Home() {
           </div>
         )}
       </div>
+      <CityPostsModal
+        open={postsOpen}
+        city={postsCity}
+        posts={posts}
+        onClose={() => setPostsOpen(false)}
+      />
     </main>
   )
 }

@@ -1,183 +1,166 @@
 """
-Summary Generator Service
-Uses OpenRouter API to generate human-readable emotional summaries
+Generates an aggregated textual summary of current mood points.
+Uses OpenRouter (LLM) if OPENROUTER_API_KEY is set; otherwise falls back
+to deterministic rule-based summary. Includes simple time-based cache.
 """
 
+from __future__ import annotations
 import os
+import time
+import statistics
+from typing import List, Dict, Any
 import httpx
-from typing import List
-from dotenv import load_dotenv
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
-from models.mood import MoodPoint
-from collections import Counter
+import logging
 
-load_dotenv()
+logger = logging.getLogger("summary")
+
+# Use the same thresholds as the Map Legend; configurable via env if needed
+POS_THRESHOLD = float(os.getenv("SENTIMENT_POS_THRESHOLD", "0.3"))
+NEG_THRESHOLD = float(os.getenv("SENTIMENT_NEG_THRESHOLD", "-0.3"))
+
+# New: control city mentions and summary style
+INCLUDE_CITIES = os.getenv("SUMMARY_INCLUDE_CITIES", "false").strip().lower() == "true"
+SUMMARY_STYLE = os.getenv("SUMMARY_STYLE", "concise").strip().lower()
+STYLE_HINTS = {
+    "concise": "Be succinct (3–5 sentences).",
+    "trend": "Emphasize short-term movements, momentum, and balance shifts.",
+    "narrative": "Use a calm, human tone; avoid statistics-heavy phrasing.",
+}
+
+CACHE_TTL_SECONDS = int(os.getenv("SUMMARY_CACHE_TTL", "45"))  # avoid regenerating too often
 
 class SummaryGenerator:
-    """Generates AI summaries of global emotional state"""
-    
     def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.enabled = bool(self.api_key)
-    
-    async def generate_summary(self, moods: List[MoodPoint]) -> str:
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", "").strip() or "openrouter/llama-3.1-8b-instruct:free"
+        self._cache_text: str | None = None
+        self._cache_key: str | None = None
+        self._cache_time: float = 0.0
+
+    async def get_latest_summary(self, db_service) -> Dict[str, Any]:
         """
-        Generate a human-readable summary of global emotional state
-        
-        Args:
-            moods: List of mood points to analyze
-            
-        Returns:
-            String summary of global emotions
+        Helper for /api/summary/audio to reuse existing summary if cached.
         """
-        if not moods:
-            return "No mood data available to analyze."
-        
-        # If OpenRouter is not configured, use rule-based summary
-        if not self.enabled:
-            return self._generate_rule_based_summary(moods)
-        
-        # Prepare data for LLM
-        summary_data = self._prepare_summary_data(moods)
-        
-        # Call OpenRouter API
-        try:
-            prompt = self._create_prompt(summary_data)
-            summary = await self._call_openrouter(prompt)
-            return summary
-        except Exception as e:
-            print(f"Error calling OpenRouter: {e}")
-            # Fallback to rule-based
-            return self._generate_rule_based_summary(moods)
-    
-    def _prepare_summary_data(self, moods: List[MoodPoint]) -> dict:
-        """Prepare mood data for summary generation"""
-        # Count by label
-        labels = [mood.label for mood in moods]
-        label_counts = Counter(labels)
-        
-        # Count by region (simplified: by continent)
-        regions = {}
-        for mood in moods:
-            region = self._get_region(mood.lat, mood.lng)
-            if region not in regions:
-                regions[region] = {"labels": [], "count": 0}
-            regions[region]["labels"].append(mood.label)
-            regions[region]["count"] += 1
-        
-        # Calculate average scores by region
-        region_scores = {}
-        for mood in moods:
-            region = self._get_region(mood.lat, mood.lng)
-            if region not in region_scores:
-                region_scores[region] = []
-            region_scores[region].append(mood.score)
-        
-        region_avg_scores = {
-            region: sum(scores) / len(scores)
-            for region, scores in region_scores.items()
-        }
-        
+        recent = await db_service.get_moods(limit=500)
+        unique = {}
+        for m in recent:
+            city = getattr(m, "city_name", None)
+            if city and city not in unique:
+                unique[city] = m
+        deduped = list(unique.values())
+        summary_text = await self.generate_summary(deduped)
+        return {"text": summary_text, "points": len(deduped)}
+
+    async def generate_summary(self, mood_points: List[Any]) -> str:
+        if not mood_points:
+            return "No mood data available yet."
+        cache_key = self._make_cache_key(mood_points)
+        if self._cache_key == cache_key and (time.time() - self._cache_time) < CACHE_TTL_SECONDS and self._cache_text:
+            return self._cache_text
+
+        agg = self._aggregate(mood_points)
+
+        if self.openrouter_api_key:
+            try:
+                text = await self._generate_ai_summary(agg)
+                self._store_cache(cache_key, text)
+                return text
+            except Exception as e:
+                logger.warning(f"AI summary failed, falling back: {e}")
+
+        text = self._generate_fallback_summary(agg)
+        self._store_cache(cache_key, text)
+        return text
+
+    def _store_cache(self, key: str, text: str):
+        self._cache_key = key
+        self._cache_text = text
+        self._cache_time = time.time()
+
+    def _make_cache_key(self, mood_points: List[Any]) -> str:
+        # Include flags so changing style/visibility busts cache
+        first_ts = getattr(mood_points[0], "timestamp", None)
+        last_ts = getattr(mood_points[-1], "timestamp", None)
+        return f"{len(mood_points)}:{first_ts}:{last_ts}:cities={INCLUDE_CITIES}:style={SUMMARY_STYLE}"
+
+    def _aggregate(self, mood_points: List[Any]) -> Dict[str, Any]:
+        # Extract fields
+        scores = [getattr(m, "score", None) for m in mood_points]
+        cities = [getattr(m, "city_name", None) for m in mood_points if getattr(m, "city_name", None)]
+
+        # Distribution by score thresholds (match UI legend)
+        total = len(mood_points)
+        pos = sum(1 for s in scores if s is not None and s > POS_THRESHOLD)
+        neg = sum(1 for s in scores if s is not None and s < NEG_THRESHOLD)
+        neu = total - pos - neg
+
+        # Aggregates
+        valid_scores = [s for s in scores if s is not None]
+        avg_score = round(sum(valid_scores) / len(valid_scores), 3) if valid_scores else 0.0
+        median_score = round(statistics.median(valid_scores), 3) if valid_scores else 0.0
+
         return {
-            "total_points": len(moods),
-            "label_distribution": dict(label_counts),
-            "regions": {k: v["count"] for k, v in regions.items()},
-            "region_scores": region_avg_scores
+            "total": total,
+            "positive": pos,
+            "neutral": neu,
+            "negative": neg,
+            "scores": valid_scores,
+            "avg_score": avg_score,
+            "median_score": median_score,
+            "cities": cities,  # kept for optional use
         }
-    
-    def _get_region(self, lat: float, lng: float) -> str:
-        """Get region/continent name from coordinates"""
-        # Simple region mapping
-        if -50 <= lat <= 50 and -180 <= lng <= -30:
-            return "North America"
-        elif -50 <= lat <= 15 and -80 <= lng <= -35:
-            return "South America"
-        elif 35 <= lat <= 70 and -10 <= lng <= 40:
-            return "Europe"
-        elif 10 <= lat <= 50 and 60 <= lng <= 150:
-            return "Asia"
-        elif -40 <= lat <= -10 and 110 <= lng <= 155:
-            return "Australia"
-        elif -35 <= lat <= 35 and -20 <= lng <= 50:
-            return "Africa"
-        else:
-            return "Other"
-    
-    def _create_prompt(self, data: dict) -> str:
-        """Create prompt for LLM"""
-        prompt = f"""Analyze the following global emotional sentiment data and write a brief, engaging summary (2-3 sentences) about the world's emotional state.
 
-Data:
-- Total data points: {data['total_points']}
-- Emotion distribution: {data['label_distribution']}
-- Regional distribution: {data['regions']}
-- Regional average sentiment scores: {data['region_scores']}
+    def _generate_fallback_summary(self, agg: Dict[str, Any]) -> str:
+        total = agg["total"]
+        if total == 0:
+            return "No mood data available yet."
+        pos, neu, neg = agg["positive"], agg["neutral"], agg["negative"]
+        def pct(n): return round((n / total) * 100, 1)
+        median_score = agg.get("median_score", 0.0)
+        tone = "optimistic" if pos > neg else "concerned" if neg > pos else "balanced"
 
-Write a natural, human-readable summary that highlights interesting patterns, regional differences, or overall emotional trends. Be concise and engaging."""
-        
-        return prompt
-    
-    async def _call_openrouter(self, prompt: str) -> str:
-        """Call OpenRouter API to generate summary"""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                self.api_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "openai/gpt-3.5-turbo",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant that analyzes emotional sentiment data and writes engaging, concise summaries."
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 200
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result["choices"][0]["message"]["content"].strip()
-            else:
-                raise Exception(f"OpenRouter API error: {response.status_code}")
-    
-    def _generate_rule_based_summary(self, moods: List[MoodPoint]) -> str:
-        """Generate summary using rule-based logic (fallback)"""
-        if not moods:
-            return "No mood data available."
-        
-        # Count emotions
-        labels = [mood.label for mood in moods]
-        label_counts = Counter(labels)
-        
-        # Find dominant emotion
-        dominant = label_counts.most_common(1)[0][0] if label_counts else "neutral"
-        
-        # Calculate average score
-        avg_score = sum(mood.score for mood in moods) / len(moods)
-        
-        # Generate simple summary
-        if avg_score > 0.2:
-            sentiment = "positive"
-        elif avg_score < -0.2:
-            sentiment = "negative"
+        if INCLUDE_CITIES:
+            # Keep a short sample when enabled
+            sample_cities = ", ".join(agg["cities"][:4]) if agg["cities"] else "various regions"
+            where = f"across {sample_cities}"
         else:
-            sentiment = "neutral"
-        
-        summary = f"Based on {len(moods)} data points, the global emotional state is {sentiment}. "
-        summary += f"The most common emotion is {dominant}. "
-        summary += f"Average sentiment score: {avg_score:.2f}."
-        
-        return summary
+            uniq_city_count = len(set(agg["cities"])) if agg["cities"] else 0
+            where = f"across {uniq_city_count} cities worldwide" if uniq_city_count else "across multiple regions worldwide"
+
+        return (
+            f"Global emotional overview: {total} recent mood points {where}. "
+            f"Positive {pct(pos)}%, Neutral {pct(neu)}%, Negative {pct(neg)}%. "
+            f"Median sentiment score {median_score}. Emotional climate appears {tone}."
+        )
+
+    def _build_prompt(self, agg: Dict[str, Any]) -> str:
+        total = agg["total"]
+        pos, neu, neg = agg["positive"], agg["neutral"], agg["negative"]
+        def pct(n): return round((n / total) * 100, 1) if total else 0.0
+        median_score = agg.get("median_score", 0.0)
+
+        style_hint = STYLE_HINTS.get(SUMMARY_STYLE, STYLE_HINTS["concise"])
+        location_rule = (
+            "Do not mention specific city or country names; speak at a global level."
+            if not INCLUDE_CITIES else
+            "You may mention at most 3 representative cities."
+        )
+
+        return (
+            f"Data window: {total} mood points using score thresholds "
+            f"(>{POS_THRESHOLD} positive, <{NEG_THRESHOLD} negative). "
+            f"Distribution: Positive {pct(pos)}%, Neutral {pct(neu)}%, Negative {pct(neg)}%. "
+            f"Median score: {median_score}. {location_rule} "
+            f"{style_hint} Write one cohesive paragraph; no bullet lists."
+        )
+
+    def _clean(self, text: str) -> str:
+        if not text:
+            return ""
+        for token in ["<s>", "</s>", "[/s]", "[/S]"]:
+            text = text.replace(token, "")
+        return text.strip()
+
+
+summary_generator = SummaryGenerator()
 

@@ -33,3 +33,6 @@ pydantic==2.5.0
 # Async utilities
 aiofiles==23.2.1
 
+# Text-to-Speech (ElevenLabs)
+requests==2.31.0
+

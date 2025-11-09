@@ -17,6 +17,13 @@ class MoodPoint(BaseModel):
     text: Optional[str] = Field(None, description="Original text snippet")
     city_name: Optional[str] = Field(None, description="Optional resolved city name")
     timestamp: Optional[datetime] = Field(None, description="When the data was collected")
+    is_fallback: Optional[bool] = Field(False, description="Whether this text was generated or fallback instead of a real fetched post")
+    country: Optional[str] = Field(None, description="Optional resolved country name")
+    platform: Optional[str] = Field(None, description="Platform of the original post (e.g., 'reddit', 'twitter')")
+    post_text: Optional[str] = Field(None, description="Text of the original post")
+    post_url: Optional[str] = Field(None, description="URL of the original post")
+    post_author: Optional[str] = Field(None, description="Author of the original post")
+    post_id: Optional[str] = Field(None, description="ID of the original post")
     
     class Config:
         json_schema_extra = {
@@ -27,6 +34,8 @@ class MoodPoint(BaseModel):
                 "score": -0.6,
                 "source": "reddit",
                 "text": "Feeling stressed about work...",
+                "city_name": "New York, USA",
+                "is_fallback": False,
                 "timestamp": "2024-01-15T10:30:00Z"
             }
         }

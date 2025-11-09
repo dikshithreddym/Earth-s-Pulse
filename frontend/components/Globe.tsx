@@ -467,4 +467,3 @@ function getColorForSentiment(score: number): string {
     return '#eab308' // Yellow for neutral
   }
 }
-

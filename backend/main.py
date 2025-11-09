@@ -5,20 +5,33 @@ Main application entry point with API endpoints
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.staticfiles import StaticFiles
 import os
 from dotenv import load_dotenv
 from datetime import datetime
 from typing import List, Optional
 import asyncio
+import base64
+from io import BytesIO
+from uuid import uuid4
+from pathlib import Path
+import logging
+import httpx
 
 from services.sentiment_analyzer import SentimentAnalyzer
 from services.social_fetcher import SocialMediaFetcher
 from services.database import DatabaseService
 from services.summary_generator import SummaryGenerator
 from models.mood import MoodPoint
+from models.post import PostItem
+from utils.geo import nearest_city
 from data.cities_200 import CITIES_200
 import random
+from services.tts import tts_service, ElevenLabsError
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 # Load environment variables
 load_dotenv()
@@ -32,11 +45,23 @@ app = FastAPI(
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://earthspulse.vercel.app",
+        "https://earthspulse-git-main-dikshith-reddy-macherlas-projects.vercel.app",
+        "https://*.vercel.app"  # Allow all Vercel preview deployments
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Static files for serving generated audio when format=url
+STATIC_DIR = Path(__file__).parent / "static"
+AUDIO_DIR = STATIC_DIR / "audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Initialize services
 sentiment_analyzer = SentimentAnalyzer()
@@ -76,6 +101,7 @@ async def startup_event():
                                     text=post["text"][:200],
                                     city_name=post.get("city_name"),
                                     timestamp=datetime.utcnow(),
+                                    is_fallback=post.get("is_fallback", False),
                                 )
                                 mood_points.append(mood)
                             except Exception as e:
@@ -215,7 +241,8 @@ async def refresh_moods(mode: Optional[str] = "city", reddit_only: bool = True):
                     source=post.get("source", "reddit"),
                     text=post["text"][:200],  # Truncate for storage
                     city_name=post.get("city_name"),
-                    timestamp=datetime.utcnow()
+                    timestamp=datetime.utcnow(),
+                    is_fallback=post.get("is_fallback", False)
                 )
                 
                 mood_points.append(mood_point)
@@ -238,30 +265,95 @@ async def refresh_moods(mode: Optional[str] = "city", reddit_only: bool = True):
 
 @app.get("/api/summary")
 async def get_summary():
-    """
-    Get AI-generated global emotional summary
-    Analyzes recent mood data and generates a human-readable summary
-    """
     try:
-        # Get recent moods for analysis
         recent_moods = await db_service.get_moods(limit=500)
-        
         if not recent_moods:
             return {
                 "summary": "No mood data available yet. Please refresh the data.",
                 "timestamp": datetime.utcnow().isoformat()
             }
-        
-        # Generate summary using LLM
-        summary = await summary_generator.generate_summary(recent_moods)
-        
+        # Keep latest per city (assuming recent_moods already sorted newest first)
+        unique_by_city = {}
+        for m in recent_moods:
+            city = getattr(m, "city_name", None)
+            if city and city not in unique_by_city:
+                unique_by_city[city] = m
+        deduped = list(unique_by_city.values())
+        summary = await summary_generator.generate_summary(deduped)
         return {
             "summary": summary,
             "timestamp": datetime.utcnow().isoformat(),
-            "data_points": len(recent_moods)
+            "data_points": len(deduped),
+            "raw_points_scanned": len(recent_moods)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")
+
+
+@app.get("/api/summary/audio")
+async def get_summary_audio(
+    format: Optional[str] = "base64",
+    voice_id: Optional[str] = None,
+    model: Optional[str] = None
+):
+    """
+    Convert the AI-generated summary to speech using ElevenLabs.
+
+    Query params:
+    - format: 'base64' (default) | 'url' | 'stream'
+    - voice_id: optional ElevenLabs voice id or name override
+    """
+    try:
+        # Reuse dedupe logic so audio matches /api/summary output
+        recent_moods = await db_service.get_moods(limit=500)
+        if not recent_moods:
+            raise HTTPException(status_code=400, detail="No mood data available yet.")
+
+        unique_by_city = {}
+        for m in recent_moods:
+            city = getattr(m, "city_name", None)
+            if city and city not in unique_by_city:
+                unique_by_city[city] = m
+        deduped = list(unique_by_city.values())
+
+        summary_text = await summary_generator.generate_summary(deduped)
+
+        if not tts_service.is_configured:
+            raise HTTPException(status_code=400, detail="ElevenLabs API key not configured.")
+        try:
+            audio_bytes = await tts_service.synthesize(summary_text, voice=voice_id, model=model)
+        except ElevenLabsError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.to_dict())
+
+        fmt = (format or "base64").lower()
+        if fmt == "stream":
+            return StreamingResponse(BytesIO(audio_bytes), media_type="audio/mpeg")
+        elif fmt == "url":
+            filename = f"summary_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{uuid4().hex[:8]}.mp3"
+            file_path = AUDIO_DIR / filename
+            with open(file_path, "wb") as f:
+                f.write(audio_bytes)
+            return {
+                "url": f"/static/audio/{filename}",
+                "mime": "audio/mpeg",
+                "summary": summary_text,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        else:  # base64
+            b64 = base64.b64encode(audio_bytes).decode("ascii")
+            return {
+                "audio_base64": b64,
+                "mime": "audio/mpeg",
+                "summary": summary_text,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if isinstance(e, ElevenLabsError):
+            # Return a flattened error object (no double 'detail' nesting)
+            raise HTTPException(status_code=getattr(e, "status_code", 500), detail=e.to_dict())
+        raise HTTPException(status_code=500, detail=f"Error generating summary audio: {str(e)}")
 
 
 @app.get("/api/stats")
@@ -320,7 +412,8 @@ async def dev_seed(force_clear: bool = False):
                 source=source,
                 text=f"{text} — seeded for {city['name']}",
                 city_name=city["name"],
-                timestamp=datetime.utcnow()
+                timestamp=datetime.utcnow(),
+                is_fallback=True,
             )
             mood_points.append(mood)
 
@@ -350,6 +443,181 @@ async def dev_clear():
         raise HTTPException(status_code=500, detail=f"Error clearing data: {e}")
 
 
+@app.get("/api/openrouter/health")
+async def openrouter_health():
+    key = os.getenv("OPENROUTER_API_KEY")
+    if not key:
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {key}"}
+            )
+        if r.status_code != 200:
+            return JSONResponse(status_code=r.status_code, content={
+                "ok": False,
+                "status": r.status_code,
+                "error": r.text
+            })
+        data = r.json()
+        return {
+            "ok": True,
+            "status": 200,
+            "models_available": len(data.get("data", [])),
+            "sample_models": [m.get("id") for m in data.get("data", [])[:5]]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Health check failed: {e}")
+
+
+def _clean_openrouter_text(txt: str) -> str:
+    if not txt:
+        return ""
+    junk = ["<s>", "</s>", "[/s]", "[/S]", "</S>"]
+    for j in junk:
+        txt = txt.replace(j, "")
+    return txt.strip()
+
+@app.get("/api/openrouter/test")
+async def openrouter_test(
+    prompt: Optional[str] = "Say 'pong'.",
+    model: Optional[str] = None
+):
+    key = os.getenv("OPENROUTER_API_KEY")
+    if not key:
+        raise HTTPException(status_code=400, detail="OPENROUTER_API_KEY not set")
+
+    # Force a minimal safe prompt if user passed empty
+    user_prompt = prompt.strip() if prompt else "Say 'pong'."
+
+    fallback_models = [
+        model or os.getenv("OPENROUTER_MODEL", "").strip(),
+        "openrouter/llama-3.1-8b-instruct:free",
+        "mistralai/mistral-7b-instruct:free",
+    ]
+    models_to_try = [m for m in dict.fromkeys(fallback_models) if m]
+
+    last_error = None
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            for m in models_to_try:
+                r = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "http://localhost:8000",
+                        "X-Title": "Earth's Pulse"
+                    },
+                    json={
+                        "model": m,
+                        "messages": [
+                            {"role": "system", "content": "Return only the direct answer."},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "max_tokens": 60,
+                        "temperature": 0.2,
+                        "stop": ["</s>", "[/s]"]
+                    }
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    raw = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                    cleaned = _clean_openrouter_text(raw)
+                    return {
+                        "ok": True,
+                        "model_used": m,
+                        "output": cleaned,
+                        "raw_output": raw,
+                        "usage": data.get("usage")
+                    }
+                last_error = {"status": r.status_code, "body": r.text}
+        return JSONResponse(status_code=502, content={"ok": False, "error": last_error or "Unknown failure"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Test call failed: {e}")
+
+@app.get("/api/posts")
+async def get_posts_by_city(city: Optional[str] = None, limit: int = 50, live: bool = False, save: bool = True):
+    """
+    Returns analyzed posts for the given city.
+    - live=true forces a fresh fetch+analyze if DB has none
+    - save=true stores fresh results for reuse
+    """
+    if not city:
+        raise HTTPException(status_code=400, detail="city is required")
+
+    posts = []
+    try:
+        if not live:
+            posts = await db_service.get_posts_by_city(city, limit=limit)
+        if not posts:
+            raw = await social_fetcher.fetch_city_posts(city, limit=limit)
+            analyzed: list[PostItem] = []
+            for r in raw:
+                text = r.get("text") or ""
+                sc, lbl = sentiment_analyzer.analyze_text(text)
+                analyzed.append(PostItem(
+                    city_name=city,
+                    country=None,
+                    platform=r.get("platform") or "unknown",
+                    text=text,
+                    url=r.get("url"),
+                    author=r.get("author"),
+                    score=sc,
+                    label=lbl
+                ))
+            if save and analyzed:
+                await db_service.insert_posts(analyzed)
+            posts = [p.dict() for p in analyzed]
+        return {"city": city, "count": len(posts), "posts": posts[:limit]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching posts: {e}")
+
+@app.get("/api/city/posts")
+async def get_city_posts(city: str, limit: int = 40, live: bool = True):
+    moods = await db_service.get_moods(limit=1000)
+    posts = []
+    for m in moods:
+        if getattr(m, "city_name", None) == city and getattr(m, "post_text", None):
+            posts.append({
+                "platform": getattr(m, "platform", None),
+                "text": m.post_text,
+                "url": getattr(m, "post_url", None),
+                "author": getattr(m, "post_author", None),
+                "score": float(m.score),
+                "label": m.label,
+                "timestamp": getattr(m, "timestamp", None).isoformat() if getattr(m, "timestamp", None) else None
+            })
+            if len(posts) >= limit:
+                break
+
+    if not posts and live and hasattr(social_fetcher, "fetch_city_posts"):
+        raw = await social_fetcher.fetch_city_posts(city, limit=limit)
+        for r in raw:
+            text = r.get("text") or ""
+            score, label = sentiment_analyzer.analyze_text(text)
+            posts.append({
+                "platform": r.get("platform") or "unknown",
+                "text": text,
+                "url": r.get("url"),
+                "author": r.get("author"),
+                "score": score,
+                "label": label,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            if len(posts) >= limit:
+                break
+
+    return {"city": city, "count": len(posts), "posts": posts[:limit]}
+
+@app.get("/api/posts/near")
+async def get_posts_near(lat: float, lng: float, limit: int = 50, within_km: float = 120):
+    city = nearest_city(lat, lng, within_km=within_km)
+    if not city:
+        raise HTTPException(status_code=404, detail="No nearby city")
+    return await get_city_posts(city=city["name"], limit=limit, live=True)
+# Optional: allows `python main.py` for quick runs
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

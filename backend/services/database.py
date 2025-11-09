@@ -13,19 +13,28 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from models.mood import MoodPoint
+from models.post import PostItem
 
 load_dotenv()
 
 class DatabaseService:
     """MongoDB service for mood data storage"""
     
-    def __init__(self):
+    def __init__(self, uri: Optional[str] = None):
         self.client = None
         self.db = None
         self.collection = None
         self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017/earthpulse")
         self.db_name = "earthpulse"
         self.collection_name = "moods"
+        self._posts_mem: List[dict] = []  # in-memory fallback
+        # If using Mongo, ensure 'posts' collection exists with indexes
+        if self.client:
+            self.posts = self.db.get_collection("posts")
+            try:
+                self.posts.create_index([("city_name", 1), ("created_at", -1)])
+            except Exception:
+                pass
     
     async def connect(self):
         """Connect to MongoDB"""
@@ -231,4 +240,23 @@ class DatabaseService:
                 "by_label": {},
                 "average_score": 0.0
             }
+    
+    async def insert_posts(self, posts: List[PostItem]) -> int:
+        """Insert posts into database"""
+        docs = [p.dict() for p in posts]
+        if getattr(self, "posts", None):
+            await self.posts.insert_many(docs)
+            return len(docs)
+        self._posts_mem.extend(docs)
+        return len(docs)
+
+    async def get_posts_by_city(self, city: str, limit: int = 50) -> List[dict]:
+        """Get posts for a specific city"""
+        if getattr(self, "posts", None):
+            cursor = self.posts.find({"city_name": city}).sort("created_at", -1).limit(limit)
+            return [doc async for doc in cursor]
+        # memory
+        res = [p for p in self._posts_mem if p.get("city_name") == city]
+        res.sort(key=lambda x: x.get("created_at"), reverse=True)
+        return res[:limit]
 

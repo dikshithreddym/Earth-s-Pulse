@@ -147,4 +147,17 @@ class SentimentAnalyzer:
             return {"label": "anxious", "score": max(-0.7, -negative_count * 0.2)}
         else:
             return {"label": "neutral", "score": 0.0}
+    
+    def analyze_text(self, text: str):
+        """Return (score: float, label: str) regardless of underlying format."""
+        res = self.analyze(text)
+        if isinstance(res, dict):
+            return float(res.get("score", 0.0)), str(res.get("label", "neutral"))
+        if isinstance(res, (list, tuple)) and len(res) >= 2:
+            a, b = res[0], res[1]
+            if isinstance(a, str) and isinstance(b, (int, float)):
+                return float(b), str(a)
+            if isinstance(a, (int, float)) and isinstance(b, str):
+                return float(a), str(b)
+        return 0.0, "neutral"
 
