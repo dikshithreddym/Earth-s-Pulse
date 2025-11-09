@@ -92,40 +92,26 @@ class SocialMediaFetcher:
         """Fetch recent Reddit posts and map them to specific cities.
 
         For each city in the provided list, attempts to find up to `per_city` Reddit posts
-        that mention the city name. If none are found quickly, falls back to mock text
-        but still returns a post mapped to the city's real coordinates.
+        that mention the city name. Returns ONLY real Reddit data, no fallbacks.
 
         Each returned dict contains: text, lat, lng, source, timestamp, city_name
         """
         results: List[Dict] = []
 
         if not self.reddit_client:
-            # No reddit client, fallback to mock but city-mapped
-            for city in cities:
-                text = random.choice(self._mock_texts())
-                results.append({
-                    "text": f"{text}",
-                    "lat": city["lat"],
-                    "lng": city["lng"],
-                    "source": "reddit",
-                    "timestamp": datetime.utcnow(),
-                    "city_name": city["name"],
-                })
-            return results
+            raise Exception("Reddit API not configured. Please set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in .env")
 
-        # Use a broad search across r/all to keep API usage low.
-        # Note: PRAW is sync; we call it from async context cautiously.
         try:
             for city in cities:
                 city_name = city["name"]
-                query = f'"{city_name}" (feeling OR mood OR today OR weather OR traffic OR happy OR sad OR stressed)'
+                query = f'"{city_name}" (feeling OR mood OR today OR weather OR traffic OR happy OR sad OR stressed OR life)'
                 found_count = 0
 
                 try:
-                    # Limit per-city search to a small number to respect rate limits
+                    # Search Reddit for this city
                     for submission in self.reddit_client.subreddit("all").search(
                         query=query,
-                        limit=max(1, per_city),
+                        limit=max(5, per_city * 2),  # Fetch more to filter
                         sort="new",
                         time_filter="day",
                     ):
@@ -133,7 +119,9 @@ class SocialMediaFetcher:
                         if hasattr(submission, 'selftext') and submission.selftext:
                             text += " " + (submission.selftext or "")
                         text = (text or "").strip()
-                        if not text:
+                        
+                        # Skip short or empty posts
+                        if not text or len(text) < 20:
                             continue
 
                         results.append({
@@ -150,21 +138,12 @@ class SocialMediaFetcher:
                 except Exception as e:
                     print(f"Reddit search error for {city_name}: {e}")
 
-                # Fallback: ensure at least one post per city
-                if found_count == 0:
-                    fallback_text = random.choice(self._mock_texts())
-                    results.append({
-                        "text": fallback_text,
-                        "lat": city["lat"],
-                        "lng": city["lng"],
-                        "source": "reddit",
-                        "timestamp": datetime.utcnow(),
-                        "city_name": city_name,
-                        "is_fallback": True,
-                    })
-
         except Exception as e:
             print(f"Error in fetch_reddit_city_posts: {e}")
+            raise
+
+        if not results:
+            raise Exception("No Reddit posts found for any cities. Check Reddit API credentials or try different cities.")
 
         return results
     
@@ -273,25 +252,8 @@ class SocialMediaFetcher:
             )
     
     def _generate_mock_posts(self, limit: int) -> List[Dict]:
-        """Generate mock posts for demo/testing when APIs are not available"""
-        mock_texts = self._mock_texts()
-        
-        posts = []
-        for i in range(limit):
-            text = random.choice(mock_texts)
-            lat, lng = self._get_random_location()
-            source = random.choice(["reddit", "twitter"])
-            
-            posts.append({
-                "text": text,
-                "lat": lat,
-                "lng": lng,
-                "source": source,
-                "timestamp": datetime.utcnow() - timedelta(minutes=random.randint(0, 60)),
-                "is_fallback": True,
-            })
-        
-        return posts
+        """Generate mock posts - REMOVED, we only use real data now"""
+        raise Exception("Mock data generation is disabled. Please configure Reddit API credentials.")
 
     def _mock_texts(self) -> List[str]:
         return [
@@ -314,43 +276,59 @@ class SocialMediaFetcher:
 
     async def fetch_city_posts(self, city: str, limit: int = 50) -> List[Dict]:
         """
-        Fetch recent posts mentioning the city. Returns list of dicts:
-        { platform, text, url, author }
+        Fetch recent posts mentioning the city from Reddit. Returns list of dicts:
+        { platform, text, url, author, lat, lng }
         """
         results: List[Dict] = []
+        
+        if not self.reddit_client:
+            raise Exception("Reddit API not configured. Please set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in .env")
+        
         try:
-            # If you already have per-platform methods, call them here with city as query.
-            # Example (pseudo):
-            # results += await self.fetch_reddit(query=city, limit=limit//2)
-            # results += await self.fetch_twitter(query=city, limit=limit//2)
-            pass
-        except Exception:
-            pass
-
-        if results:
-            return results[:limit]
-
-        # Fallback mock if APIs are not configured; remove if you strictly want only real posts.
-        return [
-            {"platform": "mock", "text": f"Sample discussion around {city} — local events and sentiment.", "url": None, "author": "demo"},
-            {"platform": "mock", "text": f"Residents in {city} share mixed feelings today.", "url": None, "author": "demo"},
-        ]
-    
-    def _to_mood_point(self, post, city_meta, sentiment_result):
-        # post: dict with keys text,url,author,id,platform
-        score, label = sentiment_result
-        return MoodPoint(
-            lat=city_meta["lat"],
-            lng=city_meta["lng"],
-            city_name=city_meta["name"],
-            country=city_meta.get("country"),
-            score=score,
-            label=label,
-            timestamp=datetime.utcnow(),
-            platform=post.get("platform"),
-            post_text=post.get("text"),
-            post_url=post.get("url"),
-            post_author=post.get("author"),
-            post_id=post.get("id"),
-        )
+            # Search Reddit for posts mentioning the city
+            query = f'"{city}" (feeling OR mood OR today OR life OR community OR people OR weather OR living OR resident)'
+            
+            print(f"Searching Reddit for: {query}")
+            
+            for submission in self.reddit_client.subreddit("all").search(
+                query=query,
+                limit=limit * 2,  # Fetch more to filter out short posts
+                sort="new",
+                time_filter="week"  # Last week to get more results
+            ):
+                text = submission.title
+                if hasattr(submission, 'selftext') and submission.selftext:
+                    text += " " + (submission.selftext or "")
+                text = (text or "").strip()
+                
+                # Skip very short posts or posts without meaningful content
+                if not text or len(text) < 20:
+                    continue
+                
+                # Get post URL
+                url = f"https://reddit.com{submission.permalink}" if hasattr(submission, 'permalink') else None
+                author = submission.author.name if hasattr(submission, 'author') and submission.author else "unknown"
+                
+                results.append({
+                    "platform": "reddit",
+                    "text": text[:1000],  # Limit text length
+                    "url": url,
+                    "author": author,
+                    "lat": 0.0,  # Will be filled by caller if needed
+                    "lng": 0.0
+                })
+                
+                if len(results) >= limit:
+                    break
+            
+            print(f"Found {len(results)} real Reddit posts for {city}")
+                    
+        except Exception as e:
+            print(f"Error fetching city posts from Reddit: {e}")
+            raise Exception(f"Failed to fetch Reddit posts: {str(e)}")
+        
+        if not results:
+            raise Exception(f"No Reddit posts found for {city}. Try a different city or check Reddit API credentials.")
+        
+        return results
 

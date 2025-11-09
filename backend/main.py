@@ -618,6 +618,182 @@ async def get_posts_near(lat: float, lng: float, limit: int = 50, within_km: flo
     if not city:
         raise HTTPException(status_code=404, detail="No nearby city")
     return await get_city_posts(city=city["name"], limit=limit, live=True)
+
+
+@app.get("/api/city/summary")
+async def get_city_summary(city: str, limit: int = 50):
+    """
+    Generate an AI-powered summary of sentiment for a specific city
+    using REAL Reddit posts and OpenRouter AI - NO MOCK DATA.
+    
+    Query parameters:
+    - city: Name of the city to analyze
+    - limit: Maximum number of posts to fetch (default: 50)
+    """
+    try:
+        # Fetch REAL posts from Reddit API (no fallbacks)
+        try:
+            raw_posts = await social_fetcher.fetch_city_posts(city, limit=limit)
+        except Exception as reddit_error:
+            # If Reddit API fails, return clear error
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to fetch Reddit posts for {city}: {str(reddit_error)}. Please check Reddit API credentials."
+            )
+        
+        if not raw_posts:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No Reddit posts found for {city}. The city might not have recent discussions on Reddit."
+            )
+        
+        # Analyze sentiment for each post
+        analyzed_posts = []
+        mood_points = []
+        
+        for post in raw_posts:
+            text = post.get("text", "")
+            if not text:
+                continue
+                
+            sentiment_result = sentiment_analyzer.analyze(text)
+            
+            analyzed_posts.append({
+                "text": text[:300],
+                "platform": post.get("platform", "reddit"),
+                "score": sentiment_result["score"],
+                "label": sentiment_result["label"],
+                "url": post.get("url"),  # Include Reddit post URL
+                "author": post.get("author")  # Include author name
+            })
+            
+            # Create mood point for summary generation
+            mood_point = MoodPoint(
+                lat=post.get("lat", 0.0),
+                lng=post.get("lng", 0.0),
+                label=sentiment_result["label"],
+                score=sentiment_result["score"],
+                source=post.get("platform", "reddit"),
+                text=text[:200],
+                city_name=city,
+                timestamp=datetime.utcnow(),
+            )
+            mood_points.append(mood_point)
+        
+        if not mood_points:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not analyze posts for {city}"
+            )
+        
+        # Generate REAL AI summary using OpenRouter (no fallbacks)
+        try:
+            summary_text = await summary_generator.generate_summary(mood_points, city_name=city)
+        except Exception as ai_error:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to generate AI summary: {str(ai_error)}. Please check OpenRouter API key."
+            )
+        
+        # Calculate statistics
+        total = len(mood_points)
+        positive = sum(1 for m in mood_points if m.score > 0.3)
+        neutral = sum(1 for m in mood_points if -0.3 <= m.score <= 0.3)
+        negative = sum(1 for m in mood_points if m.score < -0.3)
+        avg_score = sum(m.score for m in mood_points) / total if total > 0 else 0
+        
+        return {
+            "city": city,
+            "summary": summary_text,
+            "statistics": {
+                "total_posts": total,
+                "positive": positive,
+                "neutral": neutral,
+                "negative": negative,
+                "average_score": round(avg_score, 3)
+            },
+            "sample_posts": analyzed_posts[:5],  # Return top 5 posts as examples
+            "timestamp": datetime.utcnow().isoformat(),
+            "data_source": "reddit_api",  # Confirm real data
+            "ai_model": "openrouter"  # Confirm AI-generated
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating city summary: {str(e)}")
+
+
+@app.get("/api/city/summary/audio")
+async def get_city_summary_audio(
+    city: str,
+    limit: int = 50,
+    format: Optional[str] = "base64",
+    voice_id: Optional[str] = None,
+    model: Optional[str] = None
+):
+    """
+    Generate audio narration of the city summary using ElevenLabs.
+    
+    Query parameters:
+    - city: Name of the city
+    - limit: Number of posts to analyze (default: 50)
+    - format: 'base64' (default) | 'url' | 'stream'
+    - voice_id: Optional ElevenLabs voice id or name override
+    - model: Optional ElevenLabs model override
+    """
+    try:
+        # First get the city summary
+        summary_data = await get_city_summary(city=city, limit=limit)
+        summary_text = summary_data["summary"]
+        
+        if not tts_service.is_configured:
+            raise HTTPException(
+                status_code=400, 
+                detail="ElevenLabs API key not configured. Please set ELEVENLABS_API_KEY in environment."
+            )
+        
+        try:
+            audio_bytes = await tts_service.synthesize(summary_text, voice=voice_id, model=model)
+        except ElevenLabsError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.to_dict())
+        
+        fmt = (format or "base64").lower()
+        
+        if fmt == "stream":
+            return StreamingResponse(BytesIO(audio_bytes), media_type="audio/mpeg")
+        elif fmt == "url":
+            filename = f"city_{city.replace(' ', '_')}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{uuid4().hex[:8]}.mp3"
+            file_path = AUDIO_DIR / filename
+            with open(file_path, "wb") as f:
+                f.write(audio_bytes)
+            return {
+                "url": f"/static/audio/{filename}",
+                "mime": "audio/mpeg",
+                "summary": summary_text,
+                "city": city,
+                "statistics": summary_data["statistics"],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        else:  # base64
+            b64 = base64.b64encode(audio_bytes).decode("ascii")
+            return {
+                "audio_base64": b64,
+                "mime": "audio/mpeg",
+                "summary": summary_text,
+                "city": city,
+                "statistics": summary_data["statistics"],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        if isinstance(e, ElevenLabsError):
+            raise HTTPException(status_code=getattr(e, "status_code", 500), detail=e.to_dict())
+        raise HTTPException(status_code=500, detail=f"Error generating city summary audio: {str(e)}")
+
+
 # Optional: allows `python main.py` for quick runs
 if __name__ == "__main__":
     import uvicorn

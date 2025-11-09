@@ -69,8 +69,18 @@ class TTSService:
                               status_code=404)
 
     async def synthesize(self, text: str, voice: str | None = None, model: str | None = None) -> bytes:
+        """
+        Synthesize text to speech using ElevenLabs API
+        Optimized for city sentiment summaries with proper voice settings
+        """
         if not self.api_key:
-            raise ElevenLabsError("Missing ELEVENLABS_API_KEY", status_code=400)
+            raise ElevenLabsError("Missing ELEVENLABS_API_KEY. Please configure it in .env file.", status_code=400)
+        
+        # Prepare text for TTS - clean up any formatting artifacts
+        clean_text = text.strip()
+        if not clean_text:
+            raise ElevenLabsError("Cannot synthesize empty text", status_code=400)
+        
         use_voice = voice or self.default_voice
         async with httpx.AsyncClient() as client:
             # Try to resolve a name to ID; if fails, fall back silently to default ID
@@ -86,11 +96,19 @@ class TTSService:
                 if not m or m in tried:
                     continue
                 tried.append(m)
+                
+                # Enhanced voice settings for narrative city summaries
                 payload = {
-                    "text": text,
+                    "text": clean_text,
                     "model_id": m,
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.5}
+                    "voice_settings": {
+                        "stability": 0.6,  # Slightly higher for consistent narration
+                        "similarity_boost": 0.7,  # Better voice clarity
+                        "style": 0.3,  # Slight expressiveness
+                        "use_speaker_boost": True
+                    }
                 }
+                
                 r = await client.post(
                     f"https://api.elevenlabs.io/v1/text-to-speech/{use_voice}",
                     headers={
@@ -99,27 +117,35 @@ class TTSService:
                         "Content-Type": "application/json"
                     },
                     json=payload,
-                    timeout=30
+                    timeout=45  # Longer timeout for city summaries
                 )
+                
                 if r.status_code == 200:
                     return r.content
+                
                 # Parse error JSON if available
                 err_json = {}
                 try:
                     err_json = r.json()
                 except Exception:
                     pass
+                
                 status_flag = err_json.get("detail", {}).get("status")
                 # If model deprecated for free tier, continue to next
                 if status_flag == "model_deprecated_free_tier":
                     continue
+                
+                # Log the error for debugging
+                print(f"TTS attempt failed with model {m}: {r.status_code}")
+                
                 raise ElevenLabsError(
-                    f"TTS failed ({r.status_code}): {err_json or r.text}",
+                    f"TTS failed ({r.status_code}): {err_json.get('detail', {}).get('message', r.text[:200])}",
                     status_code=r.status_code,
                     meta={"model": m, "voice": use_voice}
                 )
+            
             raise ElevenLabsError(
-                f"All models failed (tried: {tried})",
+                f"All TTS models failed. Tried: {', '.join(tried)}",
                 status_code=500,
                 meta={"tried_models": tried}
             )

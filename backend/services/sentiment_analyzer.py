@@ -41,24 +41,28 @@ class SentimentAnalyzer:
         return self.pipeline is not None
     
     def _clean_text(self, text: str) -> str:
-        """Clean and preprocess text"""
+        """Clean and preprocess Reddit post text"""
         # Remove URLs
         text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
-        # Remove special characters but keep basic punctuation
-        text = re.sub(r'[^\w\s.,!?]', '', text)
+        # Remove Reddit-specific patterns
+        text = re.sub(r'\[deleted\]|\[removed\]', '', text)
+        # Remove markdown formatting
+        text = re.sub(r'\*\*|\_\_|\~\~', '', text)
+        # Remove special characters but keep basic punctuation and emojis
+        text = re.sub(r'[^\w\s.,!?\'"-💔😅👋💯❤️😊🎉🔥💪😢😡]', '', text)
         # Remove extra whitespace
         text = ' '.join(text.split())
         return text.strip()
     
     def _score_to_label(self, label: str, score: float) -> tuple:
         """
-        Convert model output to our label format
+        Convert model output to our label format for Reddit posts
         Returns: (label, normalized_score)
         """
         # Map model labels to our emotion labels
         label_map = {
             "positive": "joyful",
-            "negative": "anxious",
+            "negative": "anxious", 
             "neutral": "neutral",
             "LABEL_0": "negative",  # Some models use LABEL_0, LABEL_1, etc.
             "LABEL_1": "neutral",
@@ -68,16 +72,19 @@ class SentimentAnalyzer:
         # Normalize label
         normalized_label = label_map.get(label.lower(), "neutral")
         
-        # Normalize score to -1 to 1 range
-        # Positive -> 0 to 1, Negative -> -1 to 0, Neutral -> around 0
+        # Normalize score to -1 to 1 range with better distribution for Reddit posts
+        # Reddit posts tend to be more emotional (both positive and negative)
         if normalized_label == "joyful":
-            normalized_score = score  # 0 to 1
+            # Scale positive confidence to 0.3 to 1.0 (above neutral threshold)
+            normalized_score = 0.3 + (score * 0.7)
         elif normalized_label == "anxious":
-            normalized_score = -score  # -1 to 0
+            # Scale negative confidence to -1.0 to -0.3 (below neutral threshold)
+            normalized_score = -0.3 - (score * 0.7)
         else:
-            normalized_score = (score - 0.5) * 0.2  # Small range around 0
+            # Neutral stays in -0.3 to 0.3 range
+            normalized_score = (score - 0.5) * 0.6
         
-        return normalized_label, normalized_score
+        return normalized_label, round(normalized_score, 3)
     
     def analyze(self, text: str) -> Dict[str, any]:
         """
@@ -130,22 +137,38 @@ class SentimentAnalyzer:
         return self._fallback_analyze(cleaned_text)
     
     def _fallback_analyze(self, text: str) -> Dict[str, any]:
-        """Simple fallback sentiment analysis using keyword matching"""
+        """Enhanced fallback sentiment analysis for Reddit posts"""
         text_lower = text.lower()
         
-        # Positive keywords
-        positive_words = ["happy", "joy", "excited", "love", "great", "amazing", "wonderful", "good", "best", "awesome"]
-        # Negative keywords
-        negative_words = ["sad", "angry", "hate", "terrible", "awful", "bad", "worst", "anxious", "stress", "worried"]
+        # Positive keywords (expanded for Reddit context)
+        positive_words = [
+            "happy", "joy", "joyful", "excited", "love", "great", "amazing", "wonderful", 
+            "good", "best", "awesome", "perfect", "beautiful", "grateful", "thanks",
+            "glad", "lovely", "perfect", "celebrating", "success", "win", "won",
+            "congratulations", "fantastic", "excellent", "brilliant", "cool", "nice"
+        ]
+        
+        # Negative keywords (expanded for Reddit context)
+        negative_words = [
+            "sad", "angry", "hate", "terrible", "awful", "bad", "worst", "anxious", 
+            "stress", "stressed", "worried", "worry", "concern", "concerned", "problem",
+            "broke", "broken", "rejected", "rejection", "frustrated", "frustration",
+            "disappointed", "disappointing", "upset", "annoyed", "creep", "creepy",
+            "scared", "fear", "afraid", "hurt", "pain", "painful", "horrible"
+        ]
         
         positive_count = sum(1 for word in positive_words if word in text_lower)
         negative_count = sum(1 for word in negative_words if word in text_lower)
         
+        # Calculate score with better scaling
         if positive_count > negative_count:
-            return {"label": "joyful", "score": min(0.7, positive_count * 0.2)}
+            score = min(0.9, 0.4 + (positive_count * 0.15))
+            return {"label": "joyful", "score": score}
         elif negative_count > positive_count:
-            return {"label": "anxious", "score": max(-0.7, -negative_count * 0.2)}
+            score = max(-0.9, -0.4 - (negative_count * 0.15))
+            return {"label": "anxious", "score": score}
         else:
+            # If equal or both zero, return neutral
             return {"label": "neutral", "score": 0.0}
     
     def analyze_text(self, text: str):

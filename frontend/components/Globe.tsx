@@ -6,10 +6,11 @@ import { MoodPoint } from '@/types/mood'
 interface GlobeComponentProps {
   moods: MoodPoint[]
   loading: boolean
-  onPointClick?: (mood: MoodPoint) => void
+  onPointClick?: (point: any) => void
+  onGenerateSummary?: (cityName: string) => void
 }
 
-export default function GlobeComponent({ moods, loading, onPointClick }: GlobeComponentProps) {
+export default function GlobeComponent({ moods, loading, onPointClick, onGenerateSummary }: GlobeComponentProps) {
   const globeEl = useRef<HTMLDivElement>(null)
   const globeInstance = useRef<any>(null)
   const [globeLoaded, setGlobeLoaded] = useState(false)
@@ -265,7 +266,7 @@ export default function GlobeComponent({ moods, loading, onPointClick }: GlobeCo
       color: selectedPoint.color
     }] : []
 
-    // Update globe with points, polygons for gradient, and HTML labels
+    // Update globe with points and HTML labels
     try {
       // Add click handler for points
       globeInstance.current
@@ -277,7 +278,7 @@ export default function GlobeComponent({ moods, loading, onPointClick }: GlobeCo
         .onPointClick((point: any) => {
           if (!point) return
           
-          // Set selected point
+          // Set selected point to show popup card
           setSelectedPoint(point)
           
           // Call parent callback if provided
@@ -288,7 +289,6 @@ export default function GlobeComponent({ moods, loading, onPointClick }: GlobeCo
           // Rotate globe to focus on the clicked point
           if (globeInstance.current) {
             try {
-              // Ensure globe is fully initialized before calling pointOfView
               const currentGlobe = globeInstance.current
               if (currentGlobe && typeof currentGlobe.pointOfView === 'function') {
                 currentGlobe.pointOfView(
@@ -307,8 +307,7 @@ export default function GlobeComponent({ moods, loading, onPointClick }: GlobeCo
         })
         .pointLabel(() => '') // Disable default point labels
 
-      // Clear rings to avoid errors (user doesn't want spikes/rings)
-      // Don't clear polygons - we need country borders to stay visible
+      // Clear rings
       globeInstance.current.ringsData([])
 
       // Add HTML labels for selected points
@@ -362,9 +361,40 @@ export default function GlobeComponent({ moods, loading, onPointClick }: GlobeCo
               <div style="font-size: 10px; color: #64748b; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.1);">
                 Source: ${selectedPoint.source || 'unknown'}
               </div>
+              <button 
+                id="generate-summary-btn"
+                style="
+                  width: 100%;
+                  margin-top: 10px;
+                  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+                  color: white;
+                  padding: 8px 12px;
+                  border-radius: 6px;
+                  border: none;
+                  font-size: 11px;
+                  font-weight: 600;
+                  cursor: pointer;
+                  transition: all 0.2s;
+                  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+                "
+                onmouseover="this.style.background='linear-gradient(135deg, #2563eb, #7c3aed)'; this.style.boxShadow='0 4px 12px rgba(59, 130, 246, 0.5)';"
+                onmouseout="this.style.background='linear-gradient(135deg, #3b82f6, #8b5cf6)'; this.style.boxShadow='0 2px 8px rgba(59, 130, 246, 0.3)';"
+              >
+                🤖 Generate AI Summary
+              </button>
             </div>
           `
           el.style.pointerEvents = 'auto'
+          
+          // Add click handler for the summary button
+          const summaryBtn = el.querySelector('#generate-summary-btn')
+          if (summaryBtn && onGenerateSummary && selectedPoint.cityName) {
+            summaryBtn.addEventListener('click', (e) => {
+              e.stopPropagation()
+              onGenerateSummary(selectedPoint.cityName)
+            })
+          }
+          
           return el
         })
 
@@ -374,7 +404,7 @@ export default function GlobeComponent({ moods, loading, onPointClick }: GlobeCo
       console.error('Error updating globe data:', error)
     }
 
-  }, [moods, loading, globeLoaded, selectedPoint])
+  }, [moods, loading, globeLoaded, selectedPoint, onGenerateSummary])
 
   // Helper function to get region from coordinates
   function getRegionFromCoordinates(lat: number, lng: number): string {

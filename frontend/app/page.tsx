@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import GlobeComponent from '@/components/Globe'
 import Sidebar from '@/components/Sidebar'
-import CityPostsModal from '@/components/CityPostsModal'
+import CitySummaryModal from '@/components/CitySummaryModal'
 import { MoodPoint } from '@/types/mood'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
@@ -25,9 +25,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [postsOpen, setPostsOpen] = useState(false)
-  const [postsCity, setPostsCity] = useState<string | undefined>()
-  const [posts, setPosts] = useState<any[]>([])
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [summaryCity, setSummaryCity] = useState<string | undefined>()
 
   // Fetch moods from backend
   const fetchMoods = async () => {
@@ -115,29 +114,16 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [])
 
-  const fetchCityPosts = async (city: string) => {
-    const r = await fetch(`${API_BASE_URL}/api/city/posts?city=${encodeURIComponent(city)}&limit=40&live=true`, { cache: 'no-store' })
-    const j = await r.json()
-    setPosts(j.posts || [])
-    setPostsCity(city)
-    setPostsOpen(true)
+  const handlePointClick = (point: any) => {
+    // This is called when a point is clicked - just for logging or future use
+    console.log('Point clicked:', point?.cityName || point?.city_name)
   }
 
-  const fetchNearPosts = async (lat: number, lng: number) => {
-    const r = await fetch(`${API_BASE_URL}/api/posts/near?lat=${lat}&lng=${lng}&limit=40`, { cache: 'no-store' })
-    const j = await r.json()
-    setPosts(j.posts || [])
-    setPostsCity(j.city || j?.resolved_city?.name)
-    setPostsOpen(true)
+  const handleGenerateSummary = (cityName: string) => {
+    // This is called when "Generate AI Summary" button is clicked
+    setSummaryCity(cityName)
+    setSummaryOpen(true)
   }
-
-  const handlePointClick = (m: MoodPoint) => {
-    if (m?.city_name) fetchCityPosts(m.city_name)
-    else if (m?.lat && m?.lng) fetchNearPosts(m.lat, m.lng)
-  }
-
-  // Hook into your globe/pin click handler:
-  // globe.onPointClick((p) => openPinPosts(p.lat, p.lng));
 
   return (
     <main className="flex flex-col lg:flex-row h-screen">
@@ -197,6 +183,7 @@ export default function Home() {
           moods={moods}
           loading={loading}
           onPointClick={handlePointClick}
+          onGenerateSummary={handleGenerateSummary}
         />
         <div className="absolute top-4 left-4 right-4 lg:top-6 lg:left-6 lg:right-auto z-10 pointer-events-auto">
           <div className="bg-gray-900/80 backdrop-blur-xl rounded-xl lg:rounded-2xl px-4 py-3 lg:px-6 lg:py-4 border border-gray-700/50 shadow-2xl max-w-full">
@@ -261,11 +248,11 @@ export default function Home() {
           </div>
         )}
       </div>
-      <CityPostsModal
-        open={postsOpen}
-        city={postsCity}
-        posts={posts}
-        onClose={() => setPostsOpen(false)}
+      <CitySummaryModal
+        open={summaryOpen}
+        city={summaryCity}
+        onClose={() => setSummaryOpen(false)}
+        apiBaseUrl={API_BASE_URL}
       />
     </main>
   )
