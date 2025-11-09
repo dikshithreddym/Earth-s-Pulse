@@ -13,16 +13,16 @@ interface SidebarProps {
   onClose?: () => void
 }
 
-export default function Sidebar(props: any) {
+export default function Sidebar(props: SidebarProps) {
   const { summary, moods, lastUpdate, loading, onClose } = props
   // Calculate statistics
   const totalPoints = moods.length
-  const positiveCount = moods.filter(m => m.score > 0.3).length
-  const negativeCount = moods.filter(m => m.score < -0.3).length
-  const neutralCount = moods.filter(m => m.score >= -0.3 && m.score <= 0.3).length
+  const positiveCount = moods.filter((m: MoodPoint) => m.score > 0.3).length
+  const negativeCount = moods.filter((m: MoodPoint) => m.score < -0.3).length
+  const neutralCount = moods.filter((m: MoodPoint) => m.score >= -0.3 && m.score <= 0.3).length
   
   const avgScore = moods.length > 0
-    ? moods.reduce((sum, m) => sum + m.score, 0) / moods.length
+    ? moods.reduce((sum: number, m: MoodPoint) => sum + m.score, 0) / moods.length
     : 0
 
   // Client-side only time formatting to avoid hydration mismatch

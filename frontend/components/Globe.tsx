@@ -6,9 +6,10 @@ import { MoodPoint } from '@/types/mood'
 interface GlobeComponentProps {
   moods: MoodPoint[]
   loading: boolean
+  onPointClick?: (mood: MoodPoint) => void
 }
 
-export default function GlobeComponent({ moods, loading }: GlobeComponentProps) {
+export default function GlobeComponent({ moods, loading, onPointClick }: GlobeComponentProps) {
   const globeEl = useRef<HTMLDivElement>(null)
   const globeInstance = useRef<any>(null)
   const [globeLoaded, setGlobeLoaded] = useState(false)
@@ -278,6 +279,11 @@ export default function GlobeComponent({ moods, loading }: GlobeComponentProps) 
           
           // Set selected point
           setSelectedPoint(point)
+          
+          // Call parent callback if provided
+          if (onPointClick) {
+            onPointClick(point)
+          }
           
           // Rotate globe to focus on the clicked point
           if (globeInstance.current) {

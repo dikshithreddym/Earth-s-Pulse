@@ -49,8 +49,9 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://earthspulse.vercel.app",
-        "https://earthspulse-git-main-dikshith-reddy-macherlas-projects.vercel.app",
-        "https://*.vercel.app"  # Allow all Vercel preview deployments
+        "https://*.vercel.app",  # Allow all Vercel preview deployments
+        # Add your custom domain here when you have one
+        # "https://yourdomain.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],

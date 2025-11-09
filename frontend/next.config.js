@@ -3,7 +3,7 @@ const path = require('path')
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
-  output: 'standalone', // For Docker deployment
+  // Remove 'standalone' for Vercel deployment (only needed for Docker)
   transpilePackages: ['globe.gl', 'three-globe', 'three'],
   webpack: (config, { isServer, webpack }) => {
     // Fix for Three.js and globe.gl compatibility
@@ -18,7 +18,7 @@ const nextConfig = {
     config.resolve = config.resolve || {}
     config.resolve.alias = {
       ...(config.resolve.alias || {}),
-      three: path.resolve('./node_modules/three'),
+      three: path.resolve(__dirname, 'node_modules/three'),
       // Resolve some optional/virtual Three.js modules used by globe.gl
       // to local stub implementations so Next's bundler can find them
       'three/webgpu': path.resolve(__dirname, 'lib/three-stubs/webgpu.js'),

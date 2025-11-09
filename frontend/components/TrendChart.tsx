@@ -81,7 +81,7 @@ export default function TrendChart({ moods }: TrendChartProps) {
       name: 'Positive',
       type: 'scatter' as const,
       mode: 'lines+markers' as const,
-      line: { color: '#22c55e', width: 2.5, shape: 'spline' },
+      line: { color: '#22c55e', width: 2.5, shape: 'spline' as const },
       marker: { color: '#22c55e', size: 5, line: { color: '#16a34a', width: 1 } }
     },
     {
@@ -90,7 +90,7 @@ export default function TrendChart({ moods }: TrendChartProps) {
       name: 'Neutral',
       type: 'scatter' as const,
       mode: 'lines+markers' as const,
-      line: { color: '#eab308', width: 2.5, shape: 'spline' },
+      line: { color: '#eab308', width: 2.5, shape: 'spline' as const },
       marker: { color: '#eab308', size: 5, line: { color: '#ca8a04', width: 1 } }
     },
     {
@@ -99,7 +99,7 @@ export default function TrendChart({ moods }: TrendChartProps) {
       name: 'Negative',
       type: 'scatter' as const,
       mode: 'lines+markers' as const,
-      line: { color: '#ef4444', width: 2.5, shape: 'spline' },
+      line: { color: '#ef4444', width: 2.5, shape: 'spline' as const },
       marker: { color: '#ef4444', size: 5, line: { color: '#dc2626', width: 1 } }
     }
   ]
@@ -154,7 +154,7 @@ export default function TrendChart({ moods }: TrendChartProps) {
       orientation: 'h' as const,
       y: isMobile ? -0.3 : -0.25,
       x: 0.5,
-      xanchor: 'center',
+      xanchor: 'center' as const,
       font: { 
         size: isMobile ? 8 : 10, 
         color: '#9ca3af' 
