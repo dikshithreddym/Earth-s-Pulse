@@ -13,6 +13,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from services.database import DatabaseService
 from services.sentiment_analyzer import SentimentAnalyzer
 from models.mood import MoodPoint
+from data.cities_200 import CITIES_200
 from datetime import datetime
 import random
 
@@ -37,45 +38,32 @@ async def seed_data():
         ("Frustrated with the slow internet connection.", -0.5),
     ]
     
-    # Major cities around the world
-    cities = [
-        (40.7128, -74.0060, "New York"),
-        (34.0522, -118.2437, "Los Angeles"),
-        (51.5074, -0.1278, "London"),
-        (35.6762, 139.6503, "Tokyo"),
-        (-33.8688, 151.2093, "Sydney"),
-        (28.6139, 77.2090, "Delhi"),
-        (-23.5505, -46.6333, "São Paulo"),
-        (55.7558, 37.6173, "Moscow"),
-        (48.8566, 2.3522, "Paris"),
-        (39.9042, 116.4074, "Beijing"),
-    ]
-    
+    # Use the curated 200 global cities dataset and create one mood point per city
     mood_points = []
-    
-    for i in range(50):  # Create 50 sample points
-        text, expected_score = random.choice(sample_texts)
-        lat, lng, city = random.choice(cities)
+
+    for city in CITIES_200:
+        text, _ = random.choice(sample_texts)
         source = random.choice(["reddit", "twitter"])
-        
-        # Analyze sentiment
+
+        # Analyze sentiment for the chosen text
         result = analyzer.analyze(text)
-        
+
         mood_point = MoodPoint(
-            lat=lat + random.uniform(-5, 5),  # Add some variation
-            lng=lng + random.uniform(-5, 5),
+            lat=city["lat"],
+            lng=city["lng"],
             label=result["label"],
             score=result["score"],
             source=source,
-            text=text,
+            text=f"{text} — seeded for {city['name']}",
+            city_name=city["name"],
             timestamp=datetime.utcnow()
         )
-        
+
         mood_points.append(mood_point)
     
-    # Insert into database
+    # Insert into database (one point per city in CITIES_100)
     await db.insert_moods(mood_points)
-    print(f"✅ Seeded {len(mood_points)} mood points")
+    print(f"✅ Seeded {len(mood_points)} mood points (one per curated city)")
     
     # Show statistics
     stats = await db.get_statistics()

@@ -15,6 +15,7 @@ class MoodPoint(BaseModel):
     score: float = Field(..., ge=-1, le=1, description="Sentiment score (-1 to 1)")
     source: str = Field(..., description="Data source ('reddit' or 'twitter')")
     text: Optional[str] = Field(None, description="Original text snippet")
+    city_name: Optional[str] = Field(None, description="Optional resolved city name")
     timestamp: Optional[datetime] = Field(None, description="When the data was collected")
     
     class Config:

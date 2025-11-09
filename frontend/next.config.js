@@ -19,6 +19,10 @@ const nextConfig = {
     config.resolve.alias = {
       ...(config.resolve.alias || {}),
       three: path.resolve('./node_modules/three'),
+      // Resolve some optional/virtual Three.js modules used by globe.gl
+      // to local stub implementations so Next's bundler can find them
+      'three/webgpu': path.resolve(__dirname, 'lib/three-stubs/webgpu.js'),
+      'three/tsl': path.resolve(__dirname, 'lib/three-stubs/tsl.js'),
     }
     
     // Handle .mjs files properly

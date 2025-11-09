@@ -93,11 +93,11 @@ export default function GlobeComponent({ moods, loading }: GlobeComponentProps) 
         console.warn('Globe configuration guarded calls failed:', e)
       }
 
-      // Point of view - closer to see the Earth map better
+      // Point of view - centered on Americas to show North and South American cities
       // Delay pointOfView to ensure globe is fully initialized
       setTimeout(() => {
         if (globeInstance.current) {
-          globeInstance.current.pointOfView({ lat: 0, lng: 0, altitude: 2.0 })
+          globeInstance.current.pointOfView({ lat: 15, lng: -90, altitude: 2.0 })
         }
       }, 100)
       

@@ -4,4 +4,8 @@
 export default {};
 export const WebGPURenderer = class {};
 export const WebGPU = {};
+// Minimal GPU-specific attributes/classes used by three-globe
+export class StorageInstancedBufferAttribute {}
+
+// Re-export three core symbols as a convenience
 export * from 'three';

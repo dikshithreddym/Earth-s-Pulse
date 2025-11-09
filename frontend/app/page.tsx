@@ -17,7 +17,8 @@ export default function Home() {
   // Fetch moods from backend
   const fetchMoods = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/moods?limit=100`)
+  // Request a larger window and let the backend return only city-named, unique-per-city points
+  const response = await fetch(`${API_BASE_URL}/api/moods?limit=1000&only_city=true&unique_per_city=true`)
       if (response.ok) {
         const data = await response.json()
         setMoods(data)
