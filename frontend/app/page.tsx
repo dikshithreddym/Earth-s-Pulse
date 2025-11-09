@@ -4,8 +4,7 @@ import { useEffect, useState } from 'react'
 import GlobeComponent from '@/components/Globe'
 import Sidebar from '@/components/Sidebar'
 import { MoodPoint } from '@/types/mood'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+import { fetchJson, API_BASE_URL } from '@/lib/api'
 
 export default function Home() {
   const [moods, setMoods] = useState<MoodPoint[]>([])
@@ -13,13 +12,13 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Fetch moods from backend
   const fetchMoods = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/moods?limit=100`)
-      if (response.ok) {
-        const data = await response.json()
+      const data = await fetchJson(`${API_BASE_URL}/api/moods?limit=100`, {}, 2, 6000)
+      if (data) {
         setMoods(data)
         setLastUpdate(new Date())
       }
@@ -33,10 +32,11 @@ export default function Home() {
   // Fetch summary from backend
   const fetchSummary = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/summary`)
-      if (response.ok) {
-        const data = await response.json()
+      const data = await fetchJson(`${API_BASE_URL}/api/summary`, {}, 2, 7000)
+      if (data && data.summary) {
         setSummary(data.summary || 'No summary available')
+      } else {
+        setSummary('No summary available')
       }
     } catch (error) {
       console.error('Error fetching summary:', error)
@@ -46,11 +46,8 @@ export default function Home() {
   // Refresh moods from social media APIs
   const refreshMoods = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/moods/refresh`, {
-        method: 'POST'
-      })
-      if (response.ok) {
-        const data = await response.json()
+      const data = await fetchJson(`${API_BASE_URL}/api/moods/refresh`, { method: 'POST' }, 2, 10000)
+      if (data && typeof data.count === 'number') {
         console.log('✅ Data refreshed:', data.count, 'points')
         // After refresh, fetch the updated data
         await fetchMoods()
@@ -67,24 +64,43 @@ export default function Home() {
     const initializeData = async () => {
       setLoading(true)
       // First check if we have data
-      const response = await fetch(`${API_BASE_URL}/api/moods?limit=1`)
-      let hasData = false
-      if (response.ok) {
-        const data = await response.json()
-        hasData = data && data.length > 0
+      try {
+        // quick health probe and check for existing data
+        let hasData = false
+        try {
+          const health = await fetchJson(`${API_BASE_URL}/api/health`, {}, 2, 4000)
+          if (!health || health.status !== 'healthy') {
+            setError('Backend health check failed — ensure the backend is running and reachable')
+            setLoading(false)
+            return
+          }
+          const recent = await fetchJson(`${API_BASE_URL}/api/moods?limit=1`, {}, 2, 4000)
+          hasData = Array.isArray(recent) && recent.length > 0
+        } catch (err) {
+          console.error('Health/data probe failed:', err)
+          setError('Unable to reach API. Please check backend or API_BASE_URL.')
+          setLoading(false)
+          return
+        }
+        
+        // If no data, refresh from APIs
+        if (!hasData) {
+          await refreshMoods()
+        } else {
+          // If data exists, just fetch it
+          await fetchMoods()
+        }
+        
+        // Fetch summary
+        await fetchSummary()
+      } catch (err) {
+        console.error("Fetch failed:", err);
+        // set a UI error state instead of letting the overlay crash
+        setError("Unable to reach API. Please check backend or API_BASE_URL.");
+        setLoading(false);
+      } finally {
+        setLoading(false)
       }
-      
-      // If no data, refresh from APIs
-      if (!hasData) {
-        await refreshMoods()
-      } else {
-        // If data exists, just fetch it
-        await fetchMoods()
-      }
-      
-      // Fetch summary
-      await fetchSummary()
-      setLoading(false)
     }
     initializeData()
   }, [])
@@ -216,6 +232,42 @@ export default function Home() {
                 </div>
                 <p className="text-white font-medium text-sm lg:text-base">Loading emotional data...</p>
                 <p className="text-xs text-gray-400">Analyzing global sentiment</p>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Error Message */}
+        {error && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20">
+            <div className="bg-red-900/90 backdrop-blur-xl rounded-xl lg:rounded-2xl px-6 py-5 lg:px-8 lg:py-6 border border-red-700 shadow-2xl mx-4">
+              <div className="flex flex-col items-center gap-3">
+                <p className="text-white font-medium text-sm lg:text-base">{error}</p>
+                <button
+                  onClick={async () => {
+                    setLoading(true)
+                    setError(null)
+                    await refreshMoods()
+                    await fetchSummary()
+                    setLoading(false)
+                  }}
+                  className="bg-red-600 hover:bg-red-700 active:bg-red-800 text-white px-3 py-1.5 lg:px-4 lg:py-2 rounded-lg text-xs lg:text-sm font-medium transition-colors flex items-center gap-2 flex-shrink-0"
+                  title="Retry fetching data"
+                >
+                  <svg 
+                    className="w-4 h-4" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
+                      strokeWidth={2} 
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" 
+                    />
+                  </svg>
+                  <span className="hidden sm:inline">Retry</span>
+                </button>
               </div>
             </div>
           </div>
